@@ -41,11 +41,25 @@ def track_user(chat_id):
 
 user_states = {}
 
-# ================= Main Menu Markup =================
+# ================= Inline Main Menu Buttons =================
 def get_main_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("💳 ငွေဖြည့်မည်", "🔄 Username ချိန်းမည်")
+    markup = types.InlineKeyboardMarkup()
+    btn_deposit = types.InlineKeyboardButton("💳 ငွေဖြည့်မည်", callback_data="menu_deposit")
+    btn_change = types.InlineKeyboardButton("⚙️ Username ပြောင်းမည်", callback_data="menu_change_user")
+    markup.add(btn_deposit)
+    markup.add(btn_change)
     return markup
+
+# User ၏ လက်ကျန်ငွေ Database မှ ဆွဲယူသည့် Helper
+def get_user_balance_text(username):
+    try:
+        res = supabase.table('profiles').select('balance').ilike('username', username).execute()
+        if res.data and len(res.data) > 0:
+            bal = float(res.data[0].get('balance') or 0)
+            return f"{bal:,.0f} Ks"
+    except Exception as e:
+        print("Balance fetch error:", e)
+    return "0 Ks"
 
 # ================= /start Command =================
 @bot.message_handler(commands=['start'])
@@ -54,27 +68,55 @@ def send_welcome(message):
     track_user(message.chat.id)
     
     current_user = user_mappings.get(chat_id)
-    user_status = f"👤 လက်ရှိချိတ်ထားသော Username: **@{current_user}**" if current_user else "⚠️ Website Username မသတ်မှတ်ရသေးပါ (ငွေဖြည့်လျှင် အလိုအလျောက် တောင်းပါမည်)"
-    
-    welcome_text = (
-        "✨ **StarGrow Boost ငွေဖြည့်စနစ်မှ ကြိုဆိုပါသည်** ✨\n\n"
-        f"{user_status}\n\n"
-        "ဝန်ဆောင်မှုများကို အသုံးပြုရန် အောက်ပါ Menu ခလုတ်များကို ရွေးချယ်ပါခင်ဗျာ-"
-    )
-    bot.send_message(message.chat.id, welcome_text, reply_markup=get_main_menu(), parse_mode="Markdown")
 
-# ================= 🔄 Username ချိန်းမည် =================
-@bot.message_handler(func=lambda msg: msg.text == "🔄 Username ချိန်းမည်")
-def handle_change_username(message):
-    track_user(message.chat.id)
-    user_states[message.chat.id] = {'step': 'CHANGING_USERNAME'}
-    
-    msg = (
-        "🔄 **Website Username ချိန်းရန်**\n\n"
-        "StarGrow Website တွင် ဖွင့်ထားသော သင်၏ **Username အသစ်** ကို ရိုက်ထည့်ပေးပါခင်ဗျာ:\n"
-        "*(မချိန်းလိုပါက /cancel ဟု ရိုက်ပါ)*"
+    # Username မချိတ်ရသေးပါက အရင်တောင်းခံခြင်း
+    if not current_user:
+        user_states[message.chat.id] = {'step': 'WAITING_INITIAL_USERNAME'}
+        bot.send_message(
+            message.chat.id,
+            "👋 မင်္ဂလာပါခင်ဗျာ!\n\nStarGrow Website တွင် ဖွင့်ထားသော သင်၏ **Username** ကို ရိုက်ထည့်ပေးပါခင်ဗျာ:",
+            parse_mode="Markdown"
+        )
+        return
+
+    # လက်ကျန်ငွေ ဆွဲယူ၍ ကြိုဆိုလွှာ ပြသခြင်း
+    bal_text = get_user_balance_text(current_user)
+    welcome_text = (
+        f"👋 မင်္ဂလာပါ @{current_user}\n\n"
+        f"💰 လက်ကျန်ငွေ: {bal_text}\n\n"
+        f"အောက်ပါခလုတ်ကိုနှိပ်၍ ငွေဖြည့်သွင်းနိုင်ပါသည် 👇"
     )
-    bot.send_message(message.chat.id, msg, parse_mode="Markdown")
+    bot.send_message(message.chat.id, welcome_text, reply_markup=get_main_menu())
+
+# Username ပထမဆုံးအကြိမ် ထည့်သွင်းခြင်း လက်ခံခြင်း
+@bot.message_handler(func=lambda msg: user_states.get(msg.chat.id, {}).get('step') == 'WAITING_INITIAL_USERNAME')
+def process_initial_username(message):
+    uname = message.text.strip().replace('@', '')
+    user_mappings[str(message.chat.id)] = uname
+    save_data(MAPPINGS_FILE, user_mappings)
+    user_states.pop(message.chat.id, None)
+    
+    bot.send_message(message.chat.id, f"✅ @{uname} အကောင့်အား အောင်မြင်စွာ ချိတ်ဆက်ပြီးပါပြီ!")
+    
+    bal_text = get_user_balance_text(uname)
+    welcome_text = (
+        f"👋 မင်္ဂလာပါ @{uname}\n\n"
+        f"💰 လက်ကျန်ငွေ: {bal_text}\n\n"
+        f"အောက်ပါခလုတ်ကိုနှိပ်၍ ငွေဖြည့်သွင်းနိုင်ပါသည် 👇"
+    )
+    bot.send_message(message.chat.id, welcome_text, reply_markup=get_main_menu())
+
+# ================= ⚙️ Username ပြောင်းမည် (Inline Action) =================
+@bot.callback_query_handler(func=lambda call: call.data == "menu_change_user")
+def handle_inline_change_username(call):
+    bot.answer_callback_query(call.id)
+    user_states[call.message.chat.id] = {'step': 'CHANGING_USERNAME'}
+    msg = (
+        "⚙️ **Username ပြောင်းမည်**\n\n"
+        "StarGrow Website တွင် ဖွင့်ထားသော **Username အသစ်** ကို ရိုက်ပို့ပေးပါ:\n"
+        "*(မပြောင်းလိုပါက /cancel ဟု ရိုက်ပါ)*"
+    )
+    bot.send_message(call.message.chat.id, msg, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: user_states.get(msg.chat.id, {}).get('step') == 'CHANGING_USERNAME')
 def process_new_username(message):
@@ -84,41 +126,22 @@ def process_new_username(message):
     user_mappings[str(message.chat.id)] = new_uname
     save_data(MAPPINGS_FILE, user_mappings)
     user_states.pop(message.chat.id, None)
-    
-    bot.send_message(
-        message.chat.id,
-        f"✅ Username အား **@{new_uname}** သို့ အောင်မြင်စွာ ပြောင်းလဲသတ်မှတ်ပြီးပါပြီခင်ဗျာ!",
-        reply_markup=get_main_menu(),
-        parse_mode="Markdown"
+
+    bot.send_message(message.chat.id, f"✅ @{new_uname} အကောင့်အား အောင်မြင်စွာ ချိတ်ဆက်ပြီးပါပြီ!")
+
+    bal_text = get_user_balance_text(new_uname)
+    welcome_text = (
+        f"👋 မင်္ဂလာပါ @{new_uname}\n\n"
+        f"💰 လက်ကျန်ငွေ: {bal_text}\n\n"
+        f"အောက်ပါခလုတ်ကိုနှိပ်၍ ငွေဖြည့်သွင်းနိုင်ပါသည် 👇"
     )
+    bot.send_message(message.chat.id, welcome_text, reply_markup=get_main_menu())
 
-# ================= 💳 ငွေဖြည့်မည် =================
-@bot.message_handler(func=lambda msg: msg.text == "💳 ငွေဖြည့်မည်")
-def handle_deposit(message):
-    track_user(message.chat.id)
-    chat_id = str(message.chat.id)
-    
-    # Username မရှိသေးပါက အရင်တောင်းခြင်း
-    if chat_id not in user_mappings or not user_mappings[chat_id]:
-        user_states[message.chat.id] = {'step': 'WAITING_INITIAL_USERNAME'}
-        bot.send_message(
-            message.chat.id,
-            "👤 ငွေမဖြည့်မီ သင်၏ **StarGrow Website Username** ကို အရင်ဆုံး ရိုက်ထည့်ပေးပါခင်ဗျာ:",
-            parse_mode="Markdown"
-        )
-        return
-
-    show_payment_methods(message.chat.id)
-
-@bot.message_handler(func=lambda msg: user_states.get(msg.chat.id, {}).get('step') == 'WAITING_INITIAL_USERNAME')
-def process_initial_username(message):
-    uname = message.text.strip().replace('@', '')
-    user_mappings[str(message.chat.id)] = uname
-    save_data(MAPPINGS_FILE, user_mappings)
-    user_states.pop(message.chat.id, None)
-    
-    bot.send_message(message.chat.id, f"✅ Username **@{uname}** အား မှတ်သားထားပြီးပါပြီ။")
-    show_payment_methods(message.chat.id)
+# ================= 💳 ငွေဖြည့်မည် (Inline Action) =================
+@bot.callback_query_handler(func=lambda call: call.data == "menu_deposit")
+def handle_inline_deposit(call):
+    bot.answer_callback_query(call.id)
+    show_payment_methods(call.message.chat.id)
 
 def show_payment_methods(chat_id):
     markup = types.InlineKeyboardMarkup()
@@ -132,7 +155,7 @@ def show_payment_methods(chat_id):
         parse_mode="Markdown"
     )
 
-# ================= WavePay ရွေးချယ်ခြင်း -> ပမာဏ အရင်တောင်းခံခြင်း =================
+# ================= WavePay ရွေးချယ်ခြင်း -> ပမာဏ အရင်တောင်းခြင်း =================
 @bot.callback_query_handler(func=lambda call: call.data == "pay_wave")
 def ask_amount(call):
     bot.answer_callback_query(call.id)
@@ -206,8 +229,7 @@ def handle_slip_upload(message):
         bot.send_message(
             message.chat.id,
             "📩 **ငွေလွှဲပြေစာအား လက်ခံရရှိပါပြီခင်ဗျာ**\n\n"
-            "Admin မှ စစ်ဆေးပြီးပါက သင့်အကောင့်ထဲသို့ Balance အလိုအလျောက် ပေါင်းထည့်ပေးပါမည်။ ခေတ္တစောင့်ဆိုင်းပေးပါခင်ဗျာ။",
-            reply_markup=get_main_menu()
+            "Admin မှ စစ်ဆေးပြီးပါက သင့်အကောင့်ထဲသို့ Balance အလိုအလျောက် ပေါင်းထည့်ပေးပါမည်။ ခေတ္တစောင့်ဆိုင်းပေးပါခင်ဗျာ။"
         )
     except Exception as e:
         bot.send_message(message.chat.id, "❌ Error ဖြစ်ပေါ်သွားပါသည်။ Admin ထံ တိုက်ရိုက် ဆက်သွယ်ပေးပါ။")
@@ -252,7 +274,7 @@ def handle_admin_decision(call):
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 f"👤 **အကောင့်:** `@{username}`\n"
                 f"💵 **ဖြည့်သွင်းငွေ:** `+{formatted_amt} MMK`\n"
-                f"💳 **လက်ရှိ Balance အသစ်:** ` {formatted_new_bal} MMK`\n"
+                f"💳 **လက်ရှိ Balance အသစ်:** `{formatted_new_bal} MMK`\n"
                 "🌊 **Payment:** WavePay (Auto Confirmed)\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 "StarGrow Boost ဝန်ဆောင်မှုများကို စိတ်ကြိုက် စတင်မှာယူနိုင်ပါပြီခင်ဗျာ။ ကျေးဇူးတင်ရှိပါသည်။ ✨"
@@ -305,7 +327,7 @@ def handle_send_post(message):
 @bot.message_handler(commands=['cancel'])
 def handle_cancel(message):
     user_states.pop(message.chat.id, None)
-    bot.send_message(message.chat.id, "ပယ်ဖျက်လိုက်ပါပြီ။", reply_markup=get_main_menu())
+    bot.send_message(message.chat.id, "ပယ်ဖျက်လိုက်ပါပြီ။")
 
 @bot.message_handler(func=lambda msg: user_states.get(msg.chat.id, {}).get('step') == 'WAITING_BROADCAST_CONTENT', content_types=['text', 'photo'])
 def execute_broadcast(message):
@@ -340,7 +362,14 @@ def execute_broadcast(message):
         text=f"✅ **Post ပို့ဆောင်မှု ပြီးဆုံးပါပြီ!**\n\n📊 အောင်မြင်: {success_count} ဦး\n⚠️ မရောက်ရှိ: {fail_count} ဦး"
     )
 
+# ================= Bot Entry Point =================
 if __name__ == '__main__':
     print("StarGrow Bot is online and ready...")
-    bot.infinity_polling()
-                     
+    try:
+        # Conflict 409 ကာကွယ်ရန် webhook နှင့် pending updates များကို အရင်ရှင်းခြင်း
+        bot.remove_webhook()
+    except Exception as e:
+        print("Webhook clean error:", e)
+        
+    bot.infinity_polling(skip_pending=True)
+    
