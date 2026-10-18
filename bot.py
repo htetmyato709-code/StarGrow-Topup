@@ -3,6 +3,19 @@ from telebot import types
 from supabase import create_client, Client
 import json
 import os
+import threading
+from flask import Flask
+
+# ================= UptimeRobot အတွက် Web Server =================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "StarGrow Bot is Alive and Running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
 
 # ================= Configuration =================
 BOT_TOKEN = "8979642001:AAG3Eanke57GW0XI9Gvo89VhaNLkU0geV24"
@@ -364,6 +377,12 @@ def execute_broadcast(message):
 
 # ================= Bot Entry Point =================
 if __name__ == '__main__':
+    print("Starting Flask Web Server for UptimeRobot...")
+    # Flask Web Server ကို သီးသန့် Thread ဖြင့် Background တွင် စတင်လည်ပတ်ခြင်း
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+
     print("StarGrow Bot is online and ready...")
     try:
         # Conflict 409 ကာကွယ်ရန် webhook နှင့် pending updates များကို အရင်ရှင်းခြင်း
